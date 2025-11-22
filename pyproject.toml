@@ -1,0 +1,14 @@
+[project]
+name = "pyside-widget-reloader"
+description = ""
+version = "0.0.1"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pyside6>=6.10.1",
+    "python-minifier>=3.1.0",
+    "ruff>=0.14.6",
+]
+
+[tool.ruff]
+select = ["I"]
+line-length = 100
