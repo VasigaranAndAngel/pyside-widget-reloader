@@ -12,6 +12,11 @@ from python_minifier import minify
 
 logger = logging.getLogger("Module")
 
+excluded_sub_modules: list[str] = []
+"Module names to be excluded when scanning for submodules."
+
+__all__ = ["excluded_sub_modules", "ModuleReloader"]
+
 
 class ModuleReloader:
     instances: dict[str, "ModuleReloader"] = {}
@@ -138,15 +143,19 @@ class ModuleReloader:
         sub_modules: set["ModuleReloader"] = set()
         for i in self.module.__dict__.values():
             # TODO: filter out buil-ins and other built-in modules
-            # Region check if the module file is one of project files.
+            # region check if the module file is one of project files.
             module_name: str | None = getattr(i, "__module__", None)
             if module_name is None:
+                continue
+            if module_name in excluded_sub_modules:
                 continue
             module = sys.modules.get(module_name, None)
             if module is None:
                 continue
             module_file: str | None = getattr(module, "__file__", None)
             if module_file is None:
+                continue
+            if not module_file.lower().endswith(".py"):
                 continue
             module_path = Path(module_file)
             _continue: bool = False
