@@ -14,6 +14,7 @@ logger = logging.getLogger("Module")
 
 excluded_sub_modules: list[str] = []
 "Module names to be excluded when scanning for submodules."
+project_dir: Path = Path(sys.argv[0]).parent
 
 __all__ = ["excluded_sub_modules", "ModuleReloader"]
 
@@ -86,7 +87,6 @@ class ModuleReloader:
         self, check_sub_modules: bool = True, reload_sub_modules: bool = True
     ) -> bool:
         """Reloades the module if the hash isn't the same. Returns True if reloaded."""
-        logger.debug(f"checking_and_reload in {self.module}; {self._is_reloaded_=}")
         if self._is_reloaded_ is not None:
             return self._is_reloaded_
 
@@ -120,7 +120,6 @@ class ModuleReloader:
         return reloaded
 
     def _is_changed(self, check_sub_modules: bool = False) -> bool:
-        logging.debug(f"_is_changed in {self.module}; {self._is_changed_=}")
         if ModuleReloader._check_locked and self._is_changed_ is not None:
             return self._is_changed_
 
@@ -135,14 +134,14 @@ class ModuleReloader:
         changed = any(changeds)
         self._is_changed_ = changed
 
-        logger.info(f"Checking if changed: {self.module}; {check_sub_modules=}:: {changed}")
         return changed
 
     def _get_sub_modules(self) -> set["ModuleReloader"]:
         site_package_paths = list(map(Path, site.getsitepackages()))
         sub_modules: set["ModuleReloader"] = set()
         for i in self.module.__dict__.values():
-            # TODO: filter out buil-ins and other built-in modules
+            # TODO: filter out buil-ins and other built-in modules.
+            # TODO: currently not able to get submodules if only variable imported.
             # region check if the module file is one of project files.
             module_name: str | None = getattr(i, "__module__", None)
             if module_name is None:
@@ -158,6 +157,8 @@ class ModuleReloader:
             if not module_file.lower().endswith(".py"):
                 continue
             module_path = Path(module_file)
+            if project_dir not in module_path.parents:
+                continue
             _continue: bool = False
             for spp in site_package_paths:
                 if spp in module_path.parents:
