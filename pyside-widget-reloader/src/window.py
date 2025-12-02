@@ -5,7 +5,7 @@ from typing import Any
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLayout, QMainWindow, QVBoxLayout, QWidget
 
-from module import ModuleReloader
+from .module import ModuleReloader
 
 logger = logging.getLogger("Window")
 

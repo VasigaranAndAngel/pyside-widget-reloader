@@ -1,7 +1,7 @@
 import logging
 import multiprocessing
 
-from prepare_windows import WINDOWS
+from .prepare_windows import WINDOWS
 
 DEBUG = True
 
