@@ -1,5 +1,7 @@
 # TODO: need a big refactor
 
+"""Hot-reload helpers for tracking modules and their project submodules."""
+
 import importlib
 import logging
 import site
@@ -21,11 +23,35 @@ __all__ = ["excluded_sub_modules", "ModuleReloader"]
 
 
 class ModuleReloader:
+    """Reload modules at runtime by tracking file content hashes and optionally their submodules.
+
+    Maintains a single ModuleReloader instance per module file path. Optionally uses a minified
+    version of the source when hashing to avoid reloads due to formatting-only changes.
+    """
     instances: dict[str, "ModuleReloader"] = {}
     """Contains Module instances of each module. dict[module.__file__, Module]"""
     _check_locked: bool = False
 
-    def __new__(cls, module: ModuleType) -> "ModuleReloader":
+    def __new__(
+        cls, module: ModuleType, ruff_check: bool = False, minify_source: bool = False
+    ) -> "ModuleReloader":
+        """Create or return the unique reloader instance for a module.
+
+        Ensures a single instance per module file path. Subsequent constructions
+        return the existing instance.
+
+        Args:
+            module: Module object to manage and reload.
+            ruff_check: If True, indicates Ruff should gate reloads (currently always run).
+            minify_source: If True, hash a minified version of the source to reduce
+                reloads caused by formatting-only changes.
+
+        Returns:
+            ModuleReloader: The reloader bound to the module's file.
+
+        Raises:
+            Exception: If the module has no __file__ attribute.
+        """
         if module.__file__ is None:
             raise Exception(f"Attribute __file__ of Module: {module} is None.")
 
@@ -37,14 +63,24 @@ class ModuleReloader:
             self = super().__new__(cls)
             ModuleReloader.instances[module.__file__] = self
             self.module = module
+            self.ruff_check = ruff_check
+            self.minify_source = minify_source
             self._file_hash = self._get_hash()
             self._sub_modules = self._get_sub_modules()
             self._is_changed_ = None
             self._is_reloaded_ = None
             return self
 
-    def __init__(self, module: ModuleType) -> None:
+    def __init__(
+        self, module: ModuleType, ruff_check: bool = False, minify_source: bool = False
+    ) -> None:
+        """No-op initializer; attributes are set in __new__.
+
+        This method exists to provide type annotations for static analysis.
+        """
         self.module: ModuleType
+        self.ruff_check: bool
+        self.minify_source: bool
         self._file_hash: int
         self._sub_modules: set[ModuleReloader]
         self._is_changed_: bool | None
@@ -53,6 +89,17 @@ class ModuleReloader:
         """Whether the module is reloaded. None if not checked."""
 
     def _get_hash(self) -> int:
+        """Compute a hash of the module's source file.
+
+        Attempts text read first; when minify_source is enabled and text read succeeds,
+        hashes the minified source to avoid spurious reloads from formatting-only edits.
+
+        Returns:
+            int: Hash of the current file contents.
+
+        Raises:
+            Exception: If the module lacks a __file__ attribute.
+        """
         if self.module.__file__ is None:
             raise Exception(f"Module: {self.module} doesn't have __file__ attribute.")
 
@@ -64,14 +111,18 @@ class ModuleReloader:
         except Exception:
             source_content = path.read_bytes()
         else:  # if success reading text
-            try:
-                source_content = minify(source_code, path.as_posix())
-            except Exception:
+            if self.minify_source:
+                try:
+                    source_content = minify(source_code, path.as_posix())
+                except Exception:
+                    source_content = source_code
+            else:
                 source_content = source_code
 
         return hash(source_content)
 
     def _reload(self) -> None:
+        """Reload the module and refresh its discovered submodules."""
         logger.info(f"Reloading module: {self.module.__name__}")
         self.module = importlib.reload(self.module)
         self._sub_modules = self._get_sub_modules()
@@ -79,6 +130,17 @@ class ModuleReloader:
     def check_and_reload(
         self, check_sub_modules: bool = True, reload_sub_modules: bool = True
     ) -> bool:
+        """Check for changes and reload the module (and optionally submodules).
+
+        Wraps the internal check with a lock to avoid duplicated work across instances.
+
+        Args:
+            check_sub_modules: Include submodules in change detection.
+            reload_sub_modules: Reload submodules first, then this module if needed.
+
+        Returns:
+            bool: True if this module reloaded during the call.
+        """
         self._lock_check()
         ret = self._check_and_reload(check_sub_modules, reload_sub_modules)
         self._unlock_check()
@@ -87,7 +149,17 @@ class ModuleReloader:
     def _check_and_reload(
         self, check_sub_modules: bool = True, reload_sub_modules: bool = True
     ) -> bool:
-        """Reloades the module if the hash isn't the same. Returns True if reloaded."""
+        """Reload the module if its hash changed (including submodules when enabled).
+
+        Ruff is executed as a guard; reloading happens only when it reports no errors.
+
+        Args:
+            check_sub_modules: Whether to include submodules in change detection.
+            reload_sub_modules: Whether to reload submodules first, then this module.
+
+        Returns:
+            bool: True if the module was reloaded.
+        """
         if self._is_reloaded_ is not None:
             return self._is_reloaded_
 
@@ -122,6 +194,16 @@ class ModuleReloader:
         return reloaded
 
     def _is_changed(self, check_sub_modules: bool = False) -> bool:
+        """Return True if this module's hash (or any submodule when enabled) changed.
+
+        Uses cached state while checks are locked to avoid recomputation.
+
+        Args:
+            check_sub_modules: Include submodules in the change detection.
+
+        Returns:
+            bool: True if a change is detected.
+        """
         if ModuleReloader._check_locked and self._is_changed_ is not None:
             return self._is_changed_
 
@@ -139,6 +221,17 @@ class ModuleReloader:
         return changed
 
     def _get_sub_modules(self) -> set["ModuleReloader"]:
+        """Discover project submodules referenced by this module.
+
+        Scans the module namespace for imported modules that:
+        - live under the project directory,
+        - are Python source files,
+        - are not under site-packages,
+        - are not in the excluded_sub_modules list.
+
+        Returns:
+            set[ModuleReloader]: Reloaders for discovered submodules.
+        """
         site_package_paths = list(map(Path, site.getsitepackages()))
         sub_modules: set["ModuleReloader"] = set()
         for i in self.module.__dict__.values():
@@ -170,7 +263,7 @@ class ModuleReloader:
             if _continue:
                 continue
             # endregion
-            sub_modules.add(ModuleReloader(module))
+            sub_modules.add(ModuleReloader(module, self.ruff_check, self.minify_source))
 
         return sub_modules
 
@@ -184,10 +277,12 @@ class ModuleReloader:
 
     @staticmethod
     def _lock_check() -> None:
+        """Enable a cross-instance lock to reuse cached change checks."""
         ModuleReloader._check_locked = True
 
     @staticmethod
     def _unlock_check() -> None:
+        """Release the check lock and reset per-instance cached flags."""
         ModuleReloader._check_locked = False
         for ins in ModuleReloader.instances.values():
             ins._is_changed_ = None

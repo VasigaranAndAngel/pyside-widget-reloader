@@ -11,6 +11,12 @@ logger = logging.getLogger("Window")
 
 
 class Window:
+    """Host window that hot-reloads and displays a target Qt widget.
+
+    Manages a QTimer to watch Python modules for changes and rebuilds the
+    target widget in-place when a reload occurs.
+    """
+
     def __init__(
         self,
         widget: type[QWidget | QMainWindow],
@@ -18,24 +24,31 @@ class Window:
         *,
         check_sub_modules: bool = False,
         reload_sub_modules: bool = False,
+        ruff_check: bool = False,
+        minify_source: bool = False,
         always_on_top: bool = True,
         size: tuple[int, int] | None = None,
         args: tuple[Any] | None = None,  # pyright: ignore[reportExplicitAny]
         kwargs: dict[str, Any] | None = None,  # pyright: ignore[reportExplicitAny]
         custom_qapplication: type[QApplication] | None = None,
     ) -> None:
-        """Sets up a Window instance that starts application, checks files, and reload modules and widgets.
+        """Initialize the hot-reload host window.
+
+        Prepares configuration for the reload loop and optional custom QApplication.
+        This does not start the Qt event loop; call start_application() to run the app.
 
         Args:
-            widget (type[QWidget | QMainWindow]): The widget class to load and reload.
-            check_interval (int): Interval (in ms) to check source changes.
-            check_sub_modules (bool): Whether check sub modules for changes too.
-            reload_sub_modules (bool): Whether sub modules should be reloaded too.
-            always_on_top (bool, optional): Whether set the window to on top. Defaults to True.
-            size (tuple[int, int] | None, optional): Size of the window. Defaults to None.
-            args (tuple[Any] | None, optional): args to pass to the widget. Defaults to None.
-            kwargs (dict[str, Any] | None, optional): kwargs to pass to the widget. Defaults to None.
-            custom_qapplication (type[QApplication] | None, optional): Custom QApplication class if needed to use overloaded QApplication.
+            widget (type[QWidget | QMainWindow]): Qt widget class to instantiate and reload on changes.
+            check_interval (int): Interval in milliseconds to poll for file changes.
+            check_sub_modules (bool, optional): Whether to also watch submodules of the widget's module. Defaults to False.
+            reload_sub_modules (bool, optional): Whether to reload submodules when a change is detected. Defaults to False.
+            ruff_check (bool, optional): Whether to run ruff before reloading a module. Defaults to False.
+            minify_source (bool, optional): Whether to minify the source before reloading a module. Defaults to False.
+            always_on_top (bool, optional): Whether the host window should stay on top. Defaults to True.
+            size (tuple[int, int] | None, optional): Optional initial window size as (width, height). Defaults to None.
+            args (tuple[Any] | None, optional): Positional arguments passed to the widget constructor. Defaults to None.
+            kwargs (dict[str, Any] | None, optional): Keyword arguments passed to the widget constructor. Defaults to None.
+            custom_qapplication (type[QApplication] | None, optional): Custom QApplication subclass to use instead of the default.
         """
         self.widget: type[QWidget | QMainWindow] = widget
         "The widget to load."
@@ -45,6 +58,8 @@ class Window:
         "Whether check sub modules for change too."
         self.reload_sub_modules: bool = reload_sub_modules
         "Whether reload sub modules too."
+        self.ruff_check: bool = ruff_check
+        "Whether run ruff check before reloading."
         self.always_on_top: bool = always_on_top
         "Whether set the window on top."
         self.size: tuple[int, int] | None = size
@@ -73,6 +88,15 @@ class Window:
         "All the modules to be reloaded."
 
     def start_application(self) -> int:
+        """Start a minimal Qt application and begin periodic reload checks.
+
+        Sets up a top-level QWidget and layout container, schedules a timer to
+        periodically check watched modules for changes, and rebuilds the
+        displayed widget when a reload occurs.
+
+        Returns:
+            int: The Qt application exit code.
+        """
         ar = sys.argv
         app = QApplication(ar) if self.custom_qapplication is None else self.custom_qapplication(ar)
         window = QWidget()
@@ -91,21 +115,26 @@ class Window:
         _ = timer.timeout.connect(self._check_files_and_update_widget)
         timer.start()
 
-        QTimer.singleShot(1000, self._check_files_and_update_widget)  # TODO: should be removed
-
         self._update_widget()
         return app.exec()
 
     def _check_files_and_update_widget(self) -> None:
+        """Check watched modules and update the UI if any module reloads."""
         reloadeds: list[bool] = []
         for module in self._module_reloaders:
-            r = module.check_and_reload(self.reload_sub_modules)
+            r = module.check_and_reload(self.check_sub_modules, self.reload_sub_modules)
             reloadeds.append(r)
 
         if any(reloadeds):
             self._update_widget()
 
     def _update_widget(self) -> None:
+        """Recreate the target widget using the latest reloaded module.
+
+        Removes any existing widget instances from the layout, imports the
+        current class from the module reloader, and instantiates it with the
+        configured args/kwargs.
+        """
         # delete all the widgets in the layout
         for n in range(self._layout.count()):
             item = self._layout.itemAt(n)
@@ -117,7 +146,17 @@ class Window:
             _widget.deleteLater()
 
         # init and add new widget to the layout
-        widget: type[QWidget | QMainWindow] = self._module_reloader.module.__dict__[self.name]
-        args: tuple[Any, ...] = ar if (ar := self.args) else tuple()
-        kwargs: dict[str, Any] = kar if (kar := self.kwargs) else dict()
-        self._layout.addWidget(widget(*args, **kwargs))
+        widget = self._module_reloader.module.__dict__[self.name]  # pyright:ignore[reportAny]
+        if not isinstance(widget, type):
+            raise ValueError(
+                f"Widget {self.name} is not a QWidget or QMainWindow.",
+                "If the widget is renamed or moved, please update and restart the application.",
+            )
+        if not issubclass(widget, (QWidget, QMainWindow)):
+            raise ValueError(
+                f"Widget {self.name} is not a QWidget or QMainWindow.",
+                "If the widget is renamed or moved, please update and restart the application.",
+            )
+        args: tuple[Any, ...] = ar if (ar := self.args) else tuple()  # pyright:ignore[reportExplicitAny]
+        kwargs: dict[str, Any] = kar if (kar := self.kwargs) else dict()  # pyright:ignore[reportExplicitAny]
+        self._layout.addWidget(widget(*args, **kwargs))  # pyright:ignore[reportAny]
