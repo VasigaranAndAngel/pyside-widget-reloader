@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import override
 
 from python_minifier import minify
 
@@ -71,7 +72,7 @@ class ModuleReloader:
         return hash(source_content)
 
     def _reload(self) -> None:
-        logger.info(f"Reloading module: {self.module}")
+        logger.info(f"Reloading module: {self.module.__name__}")
         self.module = importlib.reload(self.module)
         self._sub_modules = self._get_sub_modules()
 
@@ -99,6 +100,7 @@ class ModuleReloader:
             if ruff_process.returncode:
                 logging.debug(f"Found error on `ruff check {self.module.__file__}`. Not reloading.")
             else:
+                # TODO: reload only if any of imports changed
                 self._reload()
                 reloaded = True
                 self._is_reloaded_ = True
@@ -142,6 +144,7 @@ class ModuleReloader:
         for i in self.module.__dict__.values():
             # TODO: filter out buil-ins and other built-in modules.
             # TODO: currently not able to get submodules if only variable imported.
+            # TODO: get __init__.py files too
             # region check if the module file is one of project files.
             module_name: str | None = getattr(i, "__module__", None)
             if module_name is None:
@@ -149,7 +152,7 @@ class ModuleReloader:
             if module_name in excluded_sub_modules:
                 continue
             module = sys.modules.get(module_name, None)
-            if module is None:
+            if module is None or module is self.module:
                 continue
             module_file: str | None = getattr(module, "__file__", None)
             if module_file is None:
@@ -170,6 +173,14 @@ class ModuleReloader:
             sub_modules.add(ModuleReloader(module))
 
         return sub_modules
+
+    @override
+    def __repr__(self) -> str:
+        return f'<ModuleReloader for "{self.module.__name__}" module.'
+
+    @override
+    def __str__(self) -> str:
+        return self.__repr__()
 
     @staticmethod
     def _lock_check() -> None:

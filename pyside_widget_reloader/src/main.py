@@ -1,7 +1,7 @@
 import logging
 import multiprocessing
 
-from .prepare_windows import WINDOWS
+from .window import Window
 
 DEBUG = True
 
@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("Main")
 
 
-def main() -> None:
-    for window in WINDOWS:
+def start_reloaders(windows: list[Window]) -> None:
+    for window in windows:
         if DEBUG:
             logger.debug("Only starting first window in current process")
             _ = window.start_application()
@@ -20,4 +20,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    start_reloaders([])
