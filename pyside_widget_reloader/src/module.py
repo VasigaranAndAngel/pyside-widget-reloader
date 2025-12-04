@@ -1,6 +1,22 @@
 # TODO: need a big refactor
 
-"""Hot-reload helpers for tracking modules and their project submodules."""
+"""Module Reloader for Hot-Reloading Python Modules.
+
+This module provides the `ModuleReloader` class, a utility designed for hot-reloading
+Python modules during development. It tracks changes in source files by hashing their
+content and supports recursively checking and reloading project-local submodules.
+
+Key Features:
+- Reloads modules only when their source code (or the source of their dependencies) changes.
+- Optionally minifies source code before hashing to ignore formatting-only changes.
+- Discovers and reloads submodules within the same project.
+- Avoids redundant checks using a global lock during a reload cycle.
+- Integrates with Ruff to gate reloads on successful linting checks.
+
+Usage:
+    reloader = ModuleReloader(my_module)
+    reloader.check_and_reload()
+"""
 
 import importlib
 import logging
@@ -18,6 +34,7 @@ logger = logging.getLogger("Module")
 excluded_sub_modules: list[str] = []
 "Module names to be excluded when scanning for submodules."
 project_dir: Path = Path(sys.argv[0]).parent
+"""The root directory of the project, used to identify project-local modules."""
 
 __all__ = ["excluded_sub_modules", "ModuleReloader"]
 
@@ -28,9 +45,11 @@ class ModuleReloader:
     Maintains a single ModuleReloader instance per module file path. Optionally uses a minified
     version of the source when hashing to avoid reloads due to formatting-only changes.
     """
+
     instances: dict[str, "ModuleReloader"] = {}
     """Contains Module instances of each module. dict[module.__file__, Module]"""
     _check_locked: bool = False
+    """A global lock to prevent redundant change checks within a single reload cycle."""
 
     def __new__(
         cls, module: ModuleType, ruff_check: bool = False, minify_source: bool = False
@@ -67,6 +86,7 @@ class ModuleReloader:
             self.minify_source = minify_source
             self._file_hash = self._get_hash()
             self._sub_modules = self._get_sub_modules()
+            self._parent_modules = self._get_parent_modules()
             self._is_changed_ = None
             self._is_reloaded_ = None
             return self
@@ -79,10 +99,17 @@ class ModuleReloader:
         This method exists to provide type annotations for static analysis.
         """
         self.module: ModuleType
+        """The module being managed."""
         self.ruff_check: bool
+        """If True, Ruff will be used to check for errors before reloading."""
         self.minify_source: bool
+        """If True, the source is minified before hashing to ignore formatting changes."""
         self._file_hash: int
+        """The hash of the module's source file, used for change detection."""
         self._sub_modules: set[ModuleReloader]
+        """A set of reloaders for modules imported by this one."""
+        self._parent_modules: list[ModuleReloader]
+        """A list of reloaders for parent modules."""
         self._is_changed_: bool | None
         """Whether the module is changed or not. None if not checked."""
         self._is_reloaded_: bool | None
@@ -122,10 +149,19 @@ class ModuleReloader:
         return hash(source_content)
 
     def _reload(self) -> None:
-        """Reload the module and refresh its discovered submodules."""
+        """Reload the module, refresh submodules, and trigger parent reloads.
+
+        After reloading the current module, it re-scans for submodules and parent
+        modules. It then recursively calls `_reload` on each parent to propagate
+        the change up the import chain, ensuring that modules importing this one
+        receive the updated version.
+        """
         logger.info(f"Reloading module: {self.module.__name__}")
         self.module = importlib.reload(self.module)
         self._sub_modules = self._get_sub_modules()
+        self._parent_modules = self._get_parent_modules()
+        for parent in self._parent_modules:
+            parent._reload()
 
     def check_and_reload(
         self, check_sub_modules: bool = True, reload_sub_modules: bool = True
@@ -149,13 +185,19 @@ class ModuleReloader:
     def _check_and_reload(
         self, check_sub_modules: bool = True, reload_sub_modules: bool = True
     ) -> bool:
-        """Reload the module if its hash changed (including submodules when enabled).
+        """Internal logic to reload the module if changed.
 
-        Ruff is executed as a guard; reloading happens only when it reports no errors.
+        Checks for source code changes and, if detected, runs `ruff check` as a guard.
+        Reloading proceeds only if Ruff reports no errors. It can also trigger reloads
+        for submodules.
+
+        Note:
+            The Ruff check is currently applied to all file types, but should be
+            restricted to Python source files.
 
         Args:
-            check_sub_modules: Whether to include submodules in change detection.
-            reload_sub_modules: Whether to reload submodules first, then this module.
+            check_sub_modules: If True, include submodules in the change detection.
+            reload_sub_modules: If True, reload submodules before this module.
 
         Returns:
             bool: True if the module was reloaded.
@@ -194,16 +236,23 @@ class ModuleReloader:
         return reloaded
 
     def _is_changed(self, check_sub_modules: bool = False) -> bool:
-        """Return True if this module's hash (or any submodule when enabled) changed.
+        """Check if the module or its dependencies have changed.
 
-        Uses cached state while checks are locked to avoid recomputation.
+        Compares the current file hash with its stored hash. If `check_sub_modules`
+        is True, it recursively checks for changes in all discovered submodules.
+        The check also propagates up to parent modules to ensure that importers
+        are reloaded correctly.
+
+        Uses a cached state (`_is_changed_`) during a locked check cycle to avoid
+        redundant computations and prevent circular dependencies.
 
         Args:
-            check_sub_modules: Include submodules in the change detection.
+            check_sub_modules: If True, recursively check submodules for changes.
 
         Returns:
-            bool: True if a change is detected.
+            bool: True if a change is detected in this module or its dependencies.
         """
+        # logger.info(f'Checking if "{self.module.__name__}" changed.')
         if ModuleReloader._check_locked and self._is_changed_ is not None:
             return self._is_changed_
 
@@ -218,19 +267,37 @@ class ModuleReloader:
         changed = any(changeds)
         self._is_changed_ = changed
 
+        if not changed:
+            for parent in self._parent_modules:
+                changeds.append(parent._is_changed(check_sub_modules=False))
+
+            changed = any(changeds)
+            self._is_changed_ = changed
+
         return changed
 
     def _get_sub_modules(self) -> set["ModuleReloader"]:
-        """Discover project submodules referenced by this module.
+        """Discover and return project-local submodules.
 
-        Scans the module namespace for imported modules that:
-        - live under the project directory,
-        - are Python source files,
-        - are not under site-packages,
-        - are not in the excluded_sub_modules list.
+        Scans the module's `__dict__` for imported modules and filters them to
+        identify project-local submodules.
+
+        A module is considered a project submodule if it:
+        - Is located within the project's root directory (`project_dir`).
+        - Is a Python source file (ends with `.py`).
+        - Is not part of a `site-packages` directory.
+        - Is not in the `excluded_sub_modules` list.
+
+        Note:
+            This discovery has limitations:
+            - It may not detect built-in or standard library modules correctly.
+            - It cannot find submodules when only a variable or function is imported
+              (e.g., `from my_module import my_variable`).
+            - It does not currently handle `__init__.py` files explicitly.
 
         Returns:
-            set[ModuleReloader]: Reloaders for discovered submodules.
+            set[ModuleReloader]: A set of `ModuleReloader` instances for the
+            discovered submodules.
         """
         site_package_paths = list(map(Path, site.getsitepackages()))
         sub_modules: set["ModuleReloader"] = set()
@@ -267,6 +334,37 @@ class ModuleReloader:
 
         return sub_modules
 
+    def _get_parent_modules(self) -> list["ModuleReloader"]:
+        """Identify and return all parent modules in the hierarchy.
+
+        For a module named `a.b.c`, its parents are `a.b` and `a`. This method
+        finds all existing parent modules and returns a list of `ModuleReloader`
+        instances for them.
+
+        Returns:
+            list[ModuleReloader]: A list of reloaders for parent modules, ordered
+            from the immediate parent to the top-level ancestor.
+        """
+        module_name = self.module.__name__
+        if "." in module_name:
+            parent_parts = module_name.split(".")[:-1]
+            parents: list[ModuleReloader] = []
+            for i in range(len(parent_parts)):
+                module_name = ".".join(parent_parts[: i + 1])
+                module = sys.modules.get(module_name, None)
+                if (
+                    module is not None
+                    and module.__file__ is not None
+                    and Path(module.__file__).exists()
+                ):
+                    parents.append(
+                        ModuleReloader(
+                            module, ruff_check=self.ruff_check, minify_source=self.minify_source
+                        )
+                    )
+            return list(reversed(parents))
+        return list()
+
     @override
     def __repr__(self) -> str:
         return f'<ModuleReloader for "{self.module.__name__}" module.'
@@ -289,18 +387,23 @@ class ModuleReloader:
             ins._is_reloaded_ = None
 
     @staticmethod
-    def from_module_path(path: str) -> "ModuleReloader":
-        """Get a Module instance from module path (eg: `sys`, `parent.module`)
+    def from_module_path(
+        path: str, ruff_check: bool = False, minify_source: bool = False
+    ) -> "ModuleReloader":
+        """Create or retrieve a ModuleReloader from a module path string.
 
-        Gets a Module instance from module path if exists in sys.modules. else tries to import the
-        module.
+        If the module is not already in `sys.modules`, it will be imported.
+        This serves as a factory function to get a reloader instance without
+        having the module object beforehand.
 
         Args:
-            path (str): path of module (eg: `sys`, `parent`)
+            path: The dot-separated path of the module (e.g., `my_package.my_module`).
+            ruff_check: If True, indicates Ruff should gate reloads.
+            minify_source: If True, hash a minified version of the source.
 
         Returns:
-            Module: Instance of Module
+            ModuleReloader: An instance of the reloader for the specified module.
         """
         if path not in sys.modules.keys():
             sys.modules[path] = importlib.import_module(path)
-        return ModuleReloader(sys.modules[path])
+        return ModuleReloader(sys.modules[path], ruff_check=ruff_check, minify_source=minify_source)
