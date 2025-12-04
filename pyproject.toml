@@ -13,3 +13,6 @@ dependencies = [
 [tool.ruff]
 select = ["I"]
 line-length = 100
+
+[tool.setuptools]
+packages = ["pyside_widget_reloader"]
