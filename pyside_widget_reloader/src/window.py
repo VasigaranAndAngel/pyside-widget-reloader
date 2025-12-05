@@ -50,6 +50,11 @@ class Window:
             kwargs (dict[str, Any] | None, optional): Keyword arguments passed to the widget constructor. Defaults to None.
             custom_qapplication (type[QApplication] | None, optional): Custom QApplication subclass to use instead of the default.
         """
+        # NOTE: When launching the UI in a separate process, this instance is pickled
+        # and sent to the child. Therefore, all attributes created in __init__() must be
+        # fully picklable. Do NOT store unpicklable state here. Such objects should be created
+        # inside start_application() or any methods executed in the child process.
+
         self.widget: type[QWidget | QMainWindow] = widget
         "The widget to load."
         self.check_interval: int = check_interval
@@ -78,13 +83,9 @@ class Window:
         "Name of the widget instance."
         self._module_path: str = self.widget.__module__
         "Path of module of widget."
-        self._module_reloader: ModuleReloader = ModuleReloader.from_module_path(
-            self.widget.__module__
-        )
+        self._module_reloader: ModuleReloader
         "The Module instance of widget's module."
-        self._module_reloaders: list[ModuleReloader] = [
-            self._module_reloader
-        ]  # TODO: custom modules to reload
+        self._module_reloaders: list[ModuleReloader]
         "All the modules to be reloaded."
 
     def start_application(self) -> int:
@@ -97,6 +98,11 @@ class Window:
         Returns:
             int: The Qt application exit code.
         """
+        # NOTE: This method executes in a separate child process.
+
+        self._module_reloader = ModuleReloader.from_module_path(self.widget.__module__)
+        self._module_reloaders = [self._module_reloader]  # TODO: custom modules to reload
+
         ar = sys.argv
         app = QApplication(ar) if self.custom_qapplication is None else self.custom_qapplication(ar)
         window = QWidget()
