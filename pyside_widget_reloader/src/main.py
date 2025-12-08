@@ -1,13 +1,13 @@
 import logging
 import multiprocessing
 
-from .window import Window
+from .window import ReloaderWindow
 
 logger = logging.getLogger("Main")
 
 
 def start_reloaders(
-    windows: list[Window],
+    windows: list[ReloaderWindow],
     logging_level: "logging._Level" = logging.INFO,  # pyright: ignore[reportPrivateUsage]
     debug_mode: bool = False,
 ) -> None:

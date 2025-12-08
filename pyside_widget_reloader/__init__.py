@@ -1,4 +1,4 @@
 from .src.main import start_reloaders
-from .src.window import Window
+from .src.window import ReloaderWindow
 
-__all__ = ["start_reloaders", "Window"]
+__all__ = ["start_reloaders", "ReloaderWindow"]

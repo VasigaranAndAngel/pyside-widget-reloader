@@ -10,7 +10,7 @@ from .module import ModuleReloader
 logger = logging.getLogger("Window")
 
 
-class Window:
+class ReloaderWindow:
     """Host window that hot-reloads and displays a target Qt widget.
 
     Manages a QTimer to watch Python modules for changes and rebuilds the

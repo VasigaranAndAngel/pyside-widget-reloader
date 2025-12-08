@@ -302,9 +302,8 @@ class ModuleReloader:
         site_package_paths = list(map(Path, site.getsitepackages()))
         sub_modules: set["ModuleReloader"] = set()
         for i in self.module.__dict__.values():
-            # TODO: filter out buil-ins and other built-in modules.
+            # TODO: filter out built-ins and other built-in modules.
             # TODO: currently not able to get submodules if only variable imported.
-            # TODO: get __init__.py files too
             # region check if the module file is one of project files.
             module_name: str | None = getattr(i, "__module__", None)
             if module_name is None:
