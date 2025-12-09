@@ -15,4 +15,5 @@ select = ["I"]
 line-length = 100
 
 [tool.setuptools]
-packages = ["pyside_widget_reloader"]
+packages = ["pwreloader"]
+package-dir = { "" = "src" }
