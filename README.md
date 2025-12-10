@@ -2,6 +2,8 @@
 
 `pyside-widget-reloader` is a Python development utility that automatically reload PySide widgets whenever their module file is modified. This can be incredibly useful during the development of graphical user interfaces (GUIs) with PySide, as it eliminates the need for manual reloading of widgets or restarting the application when making changes to the widget files.
 
+![reloader](https://github.com/user-attachments/assets/51ad66ae-7af3-4178-ad64-62f2d183a1d7)
+
 ## 🚀 Features
 
 * **Hot reload PySide widgets** without restarting your application.
