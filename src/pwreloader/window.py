@@ -28,8 +28,8 @@ class ReloaderWindow:
         minify_source: bool = False,
         always_on_top: bool = True,
         size: tuple[int, int] | None = None,
-        args: tuple[Any] | None = None,  # pyright: ignore[reportExplicitAny]
-        kwargs: dict[str, Any] | None = None,  # pyright: ignore[reportExplicitAny]
+        args: tuple[object, ...] | None = None,
+        kwargs: dict[str, object] | None = None,
         custom_qapplication: type[QApplication] | None = None,
     ) -> None:
         """Initialize the hot-reload host window.
@@ -46,7 +46,7 @@ class ReloaderWindow:
             minify_source (bool, optional): Whether to minify the source before reloading a module. Defaults to False.
             always_on_top (bool, optional): Whether the host window should stay on top. Defaults to True.
             size (tuple[int, int] | None, optional): Optional initial window size as (width, height). Defaults to None.
-            args (tuple[Any] | None, optional): Positional arguments passed to the widget constructor. Defaults to None.
+            args (tuple[Any, ...] | None, optional): Positional arguments passed to the widget constructor. Defaults to None.
             kwargs (dict[str, Any] | None, optional): Keyword arguments passed to the widget constructor. Defaults to None.
             custom_qapplication (type[QApplication] | None, optional): Custom QApplication subclass to use instead of the default.
         """
@@ -69,9 +69,9 @@ class ReloaderWindow:
         "Whether set the window on top."
         self.size: tuple[int, int] | None = size
         "Size of the window."
-        self.args: tuple[Any] | None = args  # pyright: ignore[reportExplicitAny]
+        self.args: tuple[object, ...] | None = args
         "Arguments to pass to the widget on initialization."
-        self.kwargs: dict[str, Any] | None = kwargs  # pyright: ignore[reportExplicitAny]
+        self.kwargs: dict[str, object] | None = kwargs
         "KeyWordArguments to pass to the widget on initialization."
         self.custom_qapplication: type[QApplication] | None = custom_qapplication
         "Custom QApplication object to run when starting the application."
